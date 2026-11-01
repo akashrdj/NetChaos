@@ -1,0 +1,74 @@
+name: NetChaos CI/CD Security Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  netchaos-gate:
+    name: Network Security Chaos & CI/CD Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Local Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build Docker Network Topology
+        run: |
+          docker compose -f docker/docker-compose.yml build --no-cache
+
+      - name: Start Ephemeral Virtual L2 Topology
+        run: |
+          docker compose -f docker/docker-compose.yml up -d
+          sleep 5
+          docker compose -f docker/docker-compose.yml exec -T test-runner ping -c 3 172.20.0.2
+          docker compose -f docker/docker-compose.yml exec -T test-runner ping -c 3 172.20.0.3
+
+      - name: Discover Dynamic Network Baseline
+        run: |
+          docker compose -f docker/docker-compose.yml exec -T test-runner python netchaos.py profile --export /app/reports/baseline.json
+
+      - name: Execute NetChaos Security Chaos Battery
+        run: |
+          docker compose -f docker/docker-compose.yml exec -T test-runner python netchaos.py run --profile compliance-audit --active-defense
+
+      - name: Evaluate NetChaos CI/CD Quality Gate
+        run: |
+          docker compose -f docker/docker-compose.yml exec -T test-runner python netchaos.py gate --profile compliance-audit
+
+      - name: Run Pytest Regression Suite
+        run: |
+          docker compose -f docker/docker-compose.yml exec -T test-runner pytest -v
+
+      - name: Extract Reports and SQLite Database
+        if: always()
+        run: |
+          mkdir -p ./reports
+          docker cp $(docker compose -f docker/docker-compose.yml ps -q test-runner):/app/reports/. ./reports/ || true
+          docker cp $(docker compose -f docker/docker-compose.yml ps -q test-runner):/app/db/results.db ./reports/results.db || true
+
+      - name: Archive Test Reports & Audit DB
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: netchaos-compliance-artifacts
+          path: reports/
+          retention-days: 14
+
+      - name: Teardown Ephemeral Network Topology
+        if: always()
+        run: |
+          docker compose -f docker/docker-compose.yml down -v
