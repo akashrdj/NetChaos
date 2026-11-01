@@ -1,0 +1,59 @@
+version: '3.8'
+
+networks:
+  l2-test-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    container_name: l2-gateway
+    mac_address: "02:42:ac:14:00:02"
+    networks:
+      l2-test-net:
+        ipv4_address: 172.20.0.2
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ip_forward=1
+    command: tail -f /dev/null
+
+  victim:
+    build:
+      context: .
+      dockerfile: Dockerfile.victim
+    container_name: l2-victim
+    mac_address: "02:42:ac:14:00:03"
+    networks:
+      l2-test-net:
+        ipv4_address: 172.20.0.3
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    command: tail -f /dev/null
+
+  test-runner:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test-runner
+    container_name: l2-test-runner
+    mac_address: "02:42:ac:14:00:0a"
+    networks:
+      l2-test-net:
+        ipv4_address: 172.20.0.10
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ..:/app
+    working_dir: /app
+    command: tail -f /dev/null
+    depends_on:
+      - gateway
+      - victim
